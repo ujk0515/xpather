@@ -4,10 +4,10 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/gestures.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart' as dom;
 import 'package:window_manager/window_manager.dart';
+import 'platform_webview/platform_webview.dart';
 import 'results_window.dart' show ElementInfo;
 
 void main() async {
@@ -49,7 +49,7 @@ class BrowserPage extends StatefulWidget {
 }
 
 class _BrowserPageState extends State<BrowserPage> {
-  late final WebViewController _controller;
+  late final PlatformWebView _webView;
   final TextEditingController _urlController = TextEditingController();
   bool _isLoading = true;
   String _currentUrl = 'https://www.google.com';
@@ -66,6 +66,7 @@ class _BrowserPageState extends State<BrowserPage> {
   void initState() {
     super.initState();
     _urlController.text = _currentUrl;
+    _webView = createPlatformWebView();
     _initWebView();
     _startExtractionTimer();
   }
@@ -75,7 +76,7 @@ class _BrowserPageState extends State<BrowserPage> {
       if (!_isCustomXPathMode || !_isInitialized) return;
 
       try {
-        final result = await _controller.runJavaScriptReturningResult('window.xpatherGetExtracted()');
+        final result = await _runJavaScriptReturningResult('window.xpatherGetExtracted()');
 
         // JavaScript에서 null을 반환하면 여기서 처리되지 않음
         if (result is! Map<Object?, Object?>) {
@@ -136,7 +137,7 @@ class _BrowserPageState extends State<BrowserPage> {
 
   Future<void> _injectScripts() async {
     try {
-      await _controller.runJavaScript('''
+      await _runJavaScript('''
         window.eleCanScroll = function(ele) {
           if (!ele) return document.documentElement;
           if (ele.scrollTop > 0) {
@@ -327,52 +328,104 @@ class _BrowserPageState extends State<BrowserPage> {
 
   Future<void> _initWebView() async {
     try {
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onPageStarted: (String url) {
-              debugPrint('페이지 로딩 시작: $url');
-              setState(() {
-                _isLoading = true;
-              });
-            },
-            onPageFinished: (String url) {
-              debugPrint('페이지 로딩 완료: $url');
-              setState(() {
-                _currentUrl = url;
-                _isLoading = false;
-              });
-              // 페이지 로드 완료 후 스크립트 주입
-              Future.delayed(const Duration(milliseconds: 500), () {
-                _injectScripts();
-              });
-            },
-            onWebResourceError: (WebResourceError error) {
-              debugPrint('WebView 에러 코드: ${error.errorCode}, 타입: ${error.errorType}, 설명: ${error.description}');
-            },
-          ),
-        );
+      await _webView.initialize(
+        initialUrl: _currentUrl,
+        onUrlChanged: (url) {
+          if (!mounted) return;
+          setState(() {
+            _currentUrl = url;
+            _urlController.text = url;
+          });
+        },
+        onPageStarted: (url) {
+          if (!mounted) return;
+          setState(() {
+            _isLoading = true;
+          });
+        },
+        onPageFinished: (url) {
+          if (!mounted) return;
+          setState(() {
+            _isLoading = false;
+            _isInitialized = true;
+          });
+          Future.delayed(const Duration(milliseconds: 500), () {
+            _injectScripts();
+          });
+        },
+        onLoadingChanged: (loading) {
+          if (!mounted) return;
+          setState(() {
+            _isLoading = loading;
+            if (!_isInitialized && !loading) {
+              _isInitialized = true;
+            }
+          });
+        },
+        onWebResourceError: (message) {
+          debugPrint('WebView 오류: $message');
+        },
+      );
 
+      if (!mounted) return;
       setState(() {
         _isInitialized = true;
-        _isLoading = true;
       });
-
-      debugPrint('WebView 초기화 완료, URL 로딩 시작: $_currentUrl');
-      await _controller.loadRequest(Uri.parse(_currentUrl));
     } catch (e) {
       debugPrint('WebView 초기화 오류: $e');
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
     }
   }
 
+  Future<void> _runJavaScript(String script) async {
+    if (!_isInitialized) return;
+    try {
+      await _webView.runJavaScript(script);
+    } catch (e) {
+      debugPrint('JavaScript 실행 오류: $e');
+    }
+  }
+
+  Future<dynamic> _runJavaScriptReturningResult(String script) async {
+    if (!_isInitialized) return null;
+    try {
+      return await _webView.runJavaScriptReturningResult(script);
+    } catch (e) {
+      debugPrint('JavaScript 결과 요청 오류: $e');
+      return null;
+    }
+  }
+
+  Future<void> _goBack() async {
+    if (!_isInitialized) return;
+    await _webView.goBack();
+  }
+
+  Future<void> _goForward() async {
+    if (!_isInitialized) return;
+    await _webView.goForward();
+  }
+
+  Future<void> _reload() async {
+    if (!_isInitialized) return;
+    await _webView.reload();
+  }
+
+  Widget _buildWebViewWidget() {
+    if (!_webView.isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return _webView.buildView();
+  }
+
   @override
   void dispose() {
     _extractionTimer?.cancel();
     _urlController.dispose();
+    unawaited(_webView.dispose());
     super.dispose();
   }
 
@@ -391,7 +444,7 @@ class _BrowserPageState extends State<BrowserPage> {
       setState(() {
         _isLoading = true;
       });
-      await _controller.loadRequest(Uri.parse(finalUrl));
+      await _webView.loadUrl(finalUrl);
       setState(() {
         _currentUrl = finalUrl;
       });
@@ -405,7 +458,7 @@ class _BrowserPageState extends State<BrowserPage> {
         _analysisResults = null;
       });
 
-      final html = await _controller.runJavaScriptReturningResult('document.documentElement.outerHTML');
+      final html = await _runJavaScriptReturningResult('document.documentElement.outerHTML');
 
       // runJavaScriptReturningResult는 문자열을 String으로 반환
       String htmlString = html.toString();
@@ -454,7 +507,7 @@ class _BrowserPageState extends State<BrowserPage> {
     if (!_isInitialized) return;
 
     try {
-      await _controller.runJavaScript('''
+      await _runJavaScript('''
         console.log('Setting xpatherCustomMode to: $enabled');
         window.xpatherCustomMode = $enabled;
 
@@ -591,15 +644,15 @@ class _BrowserPageState extends State<BrowserPage> {
               children: [
                 IconButton(
                   icon: const Icon(Icons.arrow_back),
-                  onPressed: () => _controller.goBack(),
+                  onPressed: _goBack,
                 ),
                 IconButton(
                   icon: const Icon(Icons.arrow_forward),
-                  onPressed: () => _controller.goForward(),
+                  onPressed: _goForward,
                 ),
                 IconButton(
                   icon: const Icon(Icons.refresh),
-                  onPressed: () => _controller.reload(),
+                  onPressed: _reload,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -645,7 +698,7 @@ class _BrowserPageState extends State<BrowserPage> {
               },
               onPointerSignal: (event) {
                 if (event is PointerScrollEvent) {
-                  _controller.runJavaScript('''
+                  _runJavaScript('''
                     (function() {
                       var el = document.elementFromPoint($_mouseX, $_mouseY);
                       var el2 = window.eleCanScroll(el);
@@ -660,10 +713,7 @@ class _BrowserPageState extends State<BrowserPage> {
                 autofocus: true,
                 child: Stack(
                   children: [
-                    if (_isInitialized)
-                      WebViewWidget(controller: _controller)
-                    else
-                      const Center(child: CircularProgressIndicator()),
+                    _buildWebViewWidget(),
                     if (_isLoading)
                       const Center(
                         child: CircularProgressIndicator(),
@@ -720,7 +770,8 @@ class _BrowserPageState extends State<BrowserPage> {
                       child: _ResultsPanel(
                         elements: _analysisResults!,
                         url: _currentUrl,
-                        controller: _controller,
+                        onRunJavaScript: _runJavaScript,
+                        onRunJavaScriptReturningResult: _runJavaScriptReturningResult,
                         onTabChanged: _onTabChanged,
                         customExtractedElements: _customExtractedElements,
                         onClearCustomElements: () {
@@ -728,7 +779,7 @@ class _BrowserPageState extends State<BrowserPage> {
                             _customExtractedElements.clear();
                           });
                           // 하이라이트도 제거
-                          _controller.runJavaScript('''
+                          _runJavaScript('''
                             if (window.xpatherCurrentHighlight) {
                               window.xpatherCurrentHighlight.remove();
                               window.xpatherCurrentHighlight = null;
@@ -763,7 +814,8 @@ class _BrowserPageState extends State<BrowserPage> {
 class _ResultsPanel extends StatefulWidget {
   final List<ElementInfo> elements;
   final String url;
-  final WebViewController controller;
+  final Future<void> Function(String script) onRunJavaScript;
+  final Future<dynamic> Function(String script) onRunJavaScriptReturningResult;
   final Function(int) onTabChanged;
   final List<ElementInfo> customExtractedElements;
   final VoidCallback onClearCustomElements;
@@ -772,7 +824,8 @@ class _ResultsPanel extends StatefulWidget {
   const _ResultsPanel({
     required this.elements,
     required this.url,
-    required this.controller,
+    required this.onRunJavaScript,
+    required this.onRunJavaScriptReturningResult,
     required this.onTabChanged,
     required this.customExtractedElements,
     required this.onClearCustomElements,
@@ -864,7 +917,7 @@ class _ResultsPanelState extends State<_ResultsPanel> with SingleTickerProviderS
     ''';
 
     try {
-      final result = await widget.controller.runJavaScriptReturningResult(script);
+      final result = await widget.onRunJavaScriptReturningResult(script);
       if (result.toString() == 'NOT_FOUND') {
         debugPrint('요소를 찾을 수 없음: $xpath');
         if (mounted) {
@@ -892,7 +945,7 @@ class _ResultsPanelState extends State<_ResultsPanel> with SingleTickerProviderS
     ''';
 
     try {
-      await widget.controller.runJavaScript(script);
+      await widget.onRunJavaScript(script);
     } catch (e) {
       debugPrint('하이라이트 제거 오류: $e');
     }

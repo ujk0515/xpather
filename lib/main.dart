@@ -51,6 +51,7 @@ class BrowserPage extends StatefulWidget {
 class _BrowserPageState extends State<BrowserPage> {
   late final PlatformWebView _webView;
   final TextEditingController _urlController = TextEditingController();
+  final FocusNode _urlFocusNode = FocusNode();
   bool _isLoading = true;
   String _currentUrl = 'https://www.google.com';
   bool _isInitialized = false;
@@ -330,13 +331,7 @@ class _BrowserPageState extends State<BrowserPage> {
     try {
       await _webView.initialize(
         initialUrl: _currentUrl,
-        onUrlChanged: (url) {
-          if (!mounted) return;
-          setState(() {
-            _currentUrl = url;
-            _urlController.text = url;
-          });
-        },
+        onUrlChanged: _handleUrlChanged,
         onPageStarted: (url) {
           if (!mounted) return;
           setState(() {
@@ -363,7 +358,9 @@ class _BrowserPageState extends State<BrowserPage> {
           });
         },
         onWebResourceError: (message) {
-          debugPrint('WebView 오류: $message');
+          if (message.trim().isNotEmpty) {
+            debugPrint('WebView 오류: $message');
+          }
         },
       );
 
@@ -425,6 +422,7 @@ class _BrowserPageState extends State<BrowserPage> {
   void dispose() {
     _extractionTimer?.cancel();
     _urlController.dispose();
+    _urlFocusNode.dispose();
     unawaited(_webView.dispose());
     super.dispose();
   }
@@ -444,6 +442,7 @@ class _BrowserPageState extends State<BrowserPage> {
       setState(() {
         _isLoading = true;
       });
+      _urlFocusNode.unfocus();
       await _webView.loadUrl(finalUrl);
       setState(() {
         _currentUrl = finalUrl;
@@ -541,6 +540,19 @@ class _BrowserPageState extends State<BrowserPage> {
   void _onTabChanged(int tabIndex) async {
     // tabIndex 0: 자동 분석, 1: 커스텀 XPath
     _toggleCustomXPathMode(tabIndex == 1);
+  }
+
+  void _handleUrlChanged(String url) {
+    if (!mounted) return;
+    setState(() {
+      _currentUrl = url;
+      if (!_urlFocusNode.hasFocus) {
+        _urlController.value = TextEditingValue(
+          text: url,
+          selection: TextSelection.collapsed(offset: url.length),
+        );
+      }
+    });
   }
 
   List<ElementInfo> _extractElements(dom.Document document) {
@@ -658,6 +670,7 @@ class _BrowserPageState extends State<BrowserPage> {
                 Expanded(
                   child: TextField(
                     controller: _urlController,
+                    focusNode: _urlFocusNode,
                     decoration: InputDecoration(
                       hintText: 'URL 입력',
                       filled: true,

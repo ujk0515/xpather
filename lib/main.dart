@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -79,18 +80,39 @@ class _BrowserPageState extends State<BrowserPage> {
       try {
         final result = await _runJavaScriptReturningResult('window.xpatherGetExtracted()');
 
-        // JavaScript에서 null을 반환하면 여기서 처리되지 않음
-        if (result is! Map<Object?, Object?>) {
+        if (result == null) return;
+
+        Map<String, dynamic>? data;
+
+        if (result is Map<Object?, Object?>) {
+          // webview_windows 등에서는 JS 객체가 Map으로 전달됨
+          data = {};
+          result.forEach((key, value) {
+            if (key != null) {
+              data![key.toString()] = value;
+            }
+          });
+        } else if (result is String) {
+          final trimmed = result.trim();
+          if (trimmed.isEmpty || trimmed == 'null') {
+            return;
+          }
+          try {
+            final decoded = jsonDecode(trimmed);
+            if (decoded is Map) {
+              data = decoded.map((key, value) => MapEntry(key.toString(), value));
+            } else {
+              return;
+            }
+          } catch (_) {
+            // macOS의 WKWebView는 문자열을 반환하므로 JSON 변환 실패 시 무시
+            return;
+          }
+        } else {
           return;
         }
 
-        // webview_flutter는 JavaScript 객체를 Map으로 자동 변환
-        final Map<String, dynamic> data = {};
-        result.forEach((key, value) {
-          if (key != null) {
-            data[key.toString()] = value;
-          }
-        });
+        if (data == null) return;
 
         // className이 객체일 수 있으므로 문자열로 변환
         String className = '';
@@ -309,7 +331,12 @@ class _BrowserPageState extends State<BrowserPage> {
         // 큐에서 요소를 꺼내는 함수
         window.xpatherGetExtracted = function() {
           if (window.xpatherExtractedQueue.length > 0) {
-            return window.xpatherExtractedQueue.shift();
+            const item = window.xpatherExtractedQueue.shift();
+            try {
+              return JSON.stringify(item);
+            } catch (e) {
+              return null;
+            }
           }
           return null;
         };

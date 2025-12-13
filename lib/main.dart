@@ -112,8 +112,6 @@ class _BrowserPageState extends State<BrowserPage> {
           return;
         }
 
-        if (data == null) return;
-
         // className이 객체일 수 있으므로 문자열로 변환
         String className = '';
         if (data['className'] != null) {

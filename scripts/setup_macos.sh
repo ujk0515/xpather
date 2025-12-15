@@ -10,6 +10,14 @@ FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 
 echo ">>> 프로젝트 경로: $PROJECT_ROOT"
 
+FLUTTER_SDK="/Users/yoojaekwon/development/flutter"
+if [ -d "$FLUTTER_SDK" ]; then
+  if [ ! -w "$FLUTTER_SDK/bin/cache" ]; then
+    echo ">>> Flutter SDK 권한을 사용자 계정으로 수정합니다 (비밀번호 필요)"
+    sudo chown -R "$USER" "$FLUTTER_SDK"
+  fi
+fi
+
 echo ">>> flutter clean"
 "$FLUTTER_BIN" clean >/dev/null
 
@@ -27,7 +35,7 @@ add_entitlement() {
     return
   fi
 
-  if /usr/bin/plutil -extract "$key" raw "$file" 2>/dev/null >/dev/null; then
+  if grep -q "$key" "$file"; then
     return
   fi
 

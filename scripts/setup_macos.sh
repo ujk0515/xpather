@@ -35,12 +35,17 @@ add_entitlement() {
     return
   fi
 
-  if grep -q "$key" "$file"; then
-    return
-  fi
-
-  /usr/bin/plutil -insert "$key" -bool YES "$file"
-  echo ">>> $file 에 $key 권한 추가"
+  python3 - "$file" "$key" <<'PY'
+import plistlib, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+data = plistlib.loads(path.read_bytes())
+if data.get(key) is True:
+    sys.exit(0)
+data[key] = True
+path.write_bytes(plistlib.dumps(data))
+print(f">>> {path} 에 {key} 권한 추가")
+PY
 }
 
 add_entitlement "macos/Runner/DebugProfile.entitlements"

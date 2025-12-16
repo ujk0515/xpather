@@ -8,6 +8,8 @@ import 'package:flutter/gestures.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart' as dom;
 import 'package:window_manager/window_manager.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'platform_webview/platform_webview.dart';
 import 'results_window.dart' show ElementInfo;
 
@@ -877,12 +879,65 @@ class _ResultsPanel extends StatefulWidget {
 class _ResultsPanelState extends State<_ResultsPanel> with SingleTickerProviderStateMixin {
   int? _expandedIndex;
   late TabController _tabController;
+  final TextEditingController _scriptInputController = TextEditingController();
+  final TextEditingController _scriptOutputController = TextEditingController();
+  final TextEditingController _apiKeyController = TextEditingController();
+  bool _isProcessing = false;
+  String? _savedApiKey;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(_onTabControllerChanged);
+
+    // 먼저 로드하고 나서 리스너 추가
+    _loadApiKey();
+  }
+
+  Future<void> _saveScriptInput() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('script_input', _scriptInputController.text);
+  }
+
+  Future<void> _saveScriptOutput() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('script_output', _scriptOutputController.text);
+  }
+
+  Future<void> _loadApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('gemini_api_key');
+    final scriptInput = prefs.getString('script_input');
+    final scriptOutput = prefs.getString('script_output');
+
+    if (apiKey != null) {
+      setState(() {
+        _savedApiKey = apiKey;
+        _apiKeyController.text = apiKey;
+      });
+    }
+
+    // 값 설정 (리스너 없이)
+    if (scriptInput != null) {
+      _scriptInputController.text = scriptInput;
+    }
+
+    if (scriptOutput != null) {
+      _scriptOutputController.text = scriptOutput;
+    }
+
+    // 값 로드 후 리스너 추가
+    _scriptInputController.addListener(_saveScriptInput);
+    _scriptOutputController.addListener(_saveScriptOutput);
+  }
+
+  Future<void> _saveApiKey(String apiKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('gemini_api_key', apiKey);
+    setState(() {
+      _savedApiKey = apiKey;
+    });
   }
 
   void _onTabControllerChanged() {
@@ -893,6 +948,11 @@ class _ResultsPanelState extends State<_ResultsPanel> with SingleTickerProviderS
   @override
   void dispose() {
     _tabController.dispose();
+    _scriptInputController.removeListener(_saveScriptInput);
+    _scriptOutputController.removeListener(_saveScriptOutput);
+    _scriptInputController.dispose();
+    _scriptOutputController.dispose();
+    _apiKeyController.dispose();
     super.dispose();
   }
 
@@ -1026,6 +1086,7 @@ class _ResultsPanelState extends State<_ResultsPanel> with SingleTickerProviderS
             tabs: const [
               Tab(text: '자동 분석'),
               Tab(text: '커스텀 XPath'),
+              Tab(text: 'AI XPath 매핑'),
             ],
           ),
         ),
@@ -1038,6 +1099,8 @@ class _ResultsPanelState extends State<_ResultsPanel> with SingleTickerProviderS
               _buildAutoAnalysisTab(),
               // 두 번째 탭: 커스텀 XPath
               _buildCustomXPathTab(),
+              // 세 번째 탭: AI XPath 매핑
+              _buildAiMappingTab(),
             ],
           ),
         ),
@@ -1537,5 +1600,321 @@ class _ResultsPanelState extends State<_ResultsPanel> with SingleTickerProviderS
         ),
       ],
     );
+  }
+
+  Widget _buildAiMappingTab() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // API 키 입력 영역
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.orange.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.key, color: Colors.orange.shade700, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _apiKeyController,
+                    decoration: InputDecoration(
+                      hintText: 'Gemini API 키 입력',
+                      hintStyle: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+                      border: InputBorder.none,
+                      isDense: true,
+                    ),
+                    style: const TextStyle(fontSize: 12),
+                    obscureText: true,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    if (_apiKeyController.text.isNotEmpty) {
+                      _saveApiKey(_apiKeyController.text);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('API 키가 저장되었습니다')),
+                      );
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    backgroundColor: Colors.orange.shade600,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('저장', style: TextStyle(fontSize: 11)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 메인 컨텐츠 영역
+          Expanded(
+            child: Row(
+              children: [
+                // 좌측: 입력 영역
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.code, color: Colors.blue.shade700, size: 18),
+                          const SizedBox(width: 6),
+                          const Text(
+                            '원본 스크립트',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: TextField(
+                            controller: _scriptInputController,
+                            maxLines: null,
+                            expands: true,
+                            textAlignVertical: TextAlignVertical.top,
+                            decoration: const InputDecoration(
+                              hintText: '자동화 스크립트를 붙여넣으세요...\n\n예시:\ndriver.find_element(By.XPATH, "여기에_xpath").click()',
+                              hintStyle: TextStyle(fontSize: 11, color: Colors.grey),
+                              border: InputBorder.none,
+                            ),
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // 우측: 출력 영역
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.auto_awesome, color: Colors.green.shade700, size: 18),
+                          const SizedBox(width: 6),
+                          const Text(
+                            'AI 처리 결과',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (_scriptOutputController.text.isNotEmpty)
+                            IconButton(
+                              icon: const Icon(Icons.copy, size: 18),
+                              tooltip: '복사',
+                              onPressed: () {
+                                _copyToClipboard(context, _scriptOutputController.text);
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.green.shade200),
+                          ),
+                          child: _scriptOutputController.text.isEmpty
+                              ? const Padding(
+                                  padding: EdgeInsets.all(8.0),
+                                  child: Text(
+                                    'XPath가 매핑된 스크립트가 여기에 표시됩니다',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                                  ),
+                                )
+                              : SingleChildScrollView(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(8.0),
+                                    child: SelectableText.rich(
+                                      _buildHighlightedText(_scriptOutputController.text),
+                                      style: const TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // AI 처리 버튼
+          Center(
+            child: ElevatedButton.icon(
+              onPressed: _isProcessing ? null : _processWithAI,
+              icon: _isProcessing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : const Icon(Icons.auto_awesome),
+              label: Text(_isProcessing ? 'AI 처리 중...' : 'AI로 XPath 매핑'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                backgroundColor: Colors.blue.shade700,
+                foregroundColor: Colors.white,
+                textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _processWithAI() async {
+    if (_savedApiKey == null || _savedApiKey!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('API 키를 먼저 입력하고 저장해주세요')),
+      );
+      return;
+    }
+
+    if (_scriptInputController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('원본 스크립트를 입력해주세요')),
+      );
+      return;
+    }
+
+    if (widget.elements.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('먼저 자동 분석 탭에서 페이지를 분석해주세요')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isProcessing = true;
+    });
+
+    try {
+      final model = GenerativeModel(
+        model: 'gemini-2.5-flash',
+        apiKey: _savedApiKey!,
+      );
+
+      // XPath 리스트를 문자열로 변환
+      final xpathList = widget.elements.map((e) {
+        return 'Tag: ${e.tag}, Text: "${e.text}", XPath: ${e.xpath}';
+      }).join('\n');
+
+      final prompt = '''
+당신은 자동화 테스트 스크립트의 XPath만 교체하는 전문가입니다.
+
+중요 규칙:
+1. 스크립트에서 XPath 값(문자열)만 찾아서 교체
+2. 코드 로직, 함수명, 변수명, 주석, 들여쓰기 등은 절대 수정 금지
+3. XPath가 들어갈 위치에만 적절한 XPath 삽입
+4. 원본 스크립트의 구조와 포맷을 그대로 유지
+5. 추출된 XPath 리스트에서 텍스트(Text), 태그(Tag)를 참고하여 가장 적합한 것을 선택
+6. 적합한 XPath를 찾을 수 없는 경우, 해당 줄 끝에 주석으로 표시
+   - Katalon/Groovy: // [매칭 실패] 적합한 XPath를 찾을 수 없습니다
+   - Python: # [매칭 실패] 적합한 XPath를 찾을 수 없습니다
+   - JavaScript: // [매칭 실패] 적합한 XPath를 찾을 수 없습니다
+
+XPath 패턴 인식:
+- Katalon: obj.addProperty("xpath", ConditionType.EQUALS, "여기에_xpath")
+- Selenium Python: driver.find_element(By.XPATH, "여기에_xpath")
+- Selenium Java: driver.findElement(By.xpath("여기에_xpath"))
+- Playwright: page.locator("xpath=여기에_xpath")
+- 기타: XPath 문자열이 들어가는 모든 위치
+
+추출된 XPath 리스트:
+$xpathList
+
+원본 스크립트:
+${_scriptInputController.text}
+
+출력 형식:
+- 설명 없이 수정된 코드만 출력
+- 코드 블록(```) 없이 순수 코드만
+- 원본과 동일한 들여쓰기 유지
+''';
+
+      final content = [Content.text(prompt)];
+      final response = await model.generateContent(content);
+
+      if (response.text != null) {
+        setState(() {
+          _scriptOutputController.text = response.text!.trim();
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('AI 처리 오류: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+      }
+    }
+  }
+
+  TextSpan _buildHighlightedText(String text) {
+    final lines = text.split('\n');
+    final List<TextSpan> spans = [];
+
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+
+      // Check if line contains failure marker
+      if (line.contains('[매칭 실패]')) {
+        spans.add(TextSpan(
+          text: line,
+          style: const TextStyle(color: Colors.red),
+        ));
+      } else {
+        spans.add(TextSpan(text: line));
+      }
+
+      // Add newline except for last line
+      if (i < lines.length - 1) {
+        spans.add(const TextSpan(text: '\n'));
+      }
+    }
+
+    return TextSpan(children: spans);
   }
 }

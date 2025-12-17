@@ -671,12 +671,10 @@ class _BrowserPageState extends State<BrowserPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('XPather Browser'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        elevation: 0,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(60),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(60),
+        child: Container(
+          color: Theme.of(context).colorScheme.inversePrimary,
           child: Padding(
             padding: const EdgeInsets.all(8.0),
             child: Row(
